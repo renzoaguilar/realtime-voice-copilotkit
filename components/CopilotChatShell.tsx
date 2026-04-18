@@ -55,6 +55,8 @@ export const CopilotChatShell = () => {
       name: "lookup_weather",
       description: "Renderiza el resultado de clima en una card visual.",
       parameters: WEATHER_ACTION_PARAMETERS,
+      // Esta action no ejecuta clima: solo enseña la card cuando CopilotKit ve la tool.
+      // La ejecucion real ya paso por /api/tools desde el flujo realtime.
       available: "frontend",
       render: (props) => {
         return (
@@ -74,6 +76,7 @@ export const CopilotChatShell = () => {
       name: "lookup_population",
       description: "Renderiza la poblacion de una ciudad en una card visual.",
       parameters: POPULATION_ACTION_PARAMETERS,
+      // Mismo patron que clima: renderer frontend, resultado calculado en backend.
       available: "frontend",
       render: (props) => {
         return (
@@ -88,11 +91,12 @@ export const CopilotChatShell = () => {
     [],
   );
 
+  // Renderer de seguridad: si agregamos una tool sin card propia, igual aparece legible.
   useRenderToolCall(
     {
       name: "*",
       description:
-        "Render any tool call with readable status/details for realtime and text flows.",
+        "Renderiza cualquier invocacion de tool con estado y detalle legible.",
       parameters: [],
       render: (props: any) => {
         return (

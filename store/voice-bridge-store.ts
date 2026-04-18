@@ -47,6 +47,7 @@ const trimTimeline = (timeline: VoiceTimelineEvent[]): VoiceTimelineEvent[] => {
     return timeline;
   }
 
+  // La linea de tiempo es solo diagnostico visual; recortarla no afecta la conversacion.
   return timeline.slice(timeline.length - MAX_TIMELINE_EVENTS);
 };
 
@@ -56,6 +57,7 @@ export const useVoiceBridgeStore = create<VoiceBridgeState>((set) => ({
   toolsByCallId: {},
   toolOrder: [],
 
+  // Estado compartido por controles de voz, timeline y bridge visual de CopilotKit.
   setConnectionState: (next, eventType, detail) =>
     set((state) => {
       const timeline = eventType
@@ -77,6 +79,8 @@ export const useVoiceBridgeStore = create<VoiceBridgeState>((set) => ({
     set((state) => {
       const now = Date.now();
       const existing = state.toolsByCallId[callId];
+      // callId es la identidad estable de una tool en Realtime.
+      // Si vuelve a aparecer, actualizamos el registro en vez de duplicarlo.
       const nextRecord: ToolExecutionRecord = existing
         ? {
             ...existing,

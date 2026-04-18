@@ -10,6 +10,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const runtimeInstance = new CopilotRuntime({
+  // El chat de texto tambien usa el catalogo central de tools.
+  // Asi una nueva tool no se define dos veces en lugares distintos.
   actions: getCopilotRuntimeActions(),
 });
 
@@ -17,6 +19,7 @@ const handler = async (request: Request): Promise<Response> => {
   const serviceAdapter = new OpenAIAdapter({
     openai: getOpenAIClient(),
     model: process.env.COPILOTKIT_TEXT_MODEL ?? "gpt-4o-mini",
+    // Reduce sorpresas en demos: el modelo no dispara varias tools en paralelo.
     disableParallelToolCalls: true,
   });
 

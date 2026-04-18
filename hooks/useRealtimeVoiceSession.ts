@@ -33,6 +33,9 @@ type SessionBootstrapResponse = {
   expiresAt?: number;
 };
 
+// Los argumentos de una tool llegan como string JSON desde Realtime.
+// Si el JSON viene incompleto o mal formado, preferimos no romper la sesion de voz:
+// registramos la tool con args vacios y dejamos que el backend valide.
 const safeParseRecord = (value: string): Record<string, unknown> => {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -40,7 +43,7 @@ const safeParseRecord = (value: string): Record<string, unknown> => {
       return parsed as Record<string, unknown>;
     }
   } catch {
-    // ignored on purpose
+    // La validacion real ocurre en /api/tools con zod.
   }
 
   return {};
@@ -72,11 +75,14 @@ export type UseRealtimeVoiceSessionResult = {
 export const useRealtimeVoiceSession = (): UseRealtimeVoiceSessionResult => {
   const connectionState = useVoiceBridgeStore((state) => state.connectionState);
 
+  // Estas refs representan recursos vivos del navegador. No van en state de React
+  // porque no deben provocar renders y deben cerrarse manualmente al apagar voz.
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const activeRef = useRef(false);
+  // Realtime puede reemitir eventos; call_id nos permite ejecutar cada tool una vez.
   const handledToolCallIdsRef = useRef<Set<string>>(new Set());
 
   const setConnectionState = useCallback((next: VoiceSessionState) => {
@@ -124,6 +130,8 @@ export const useRealtimeVoiceSession = (): UseRealtimeVoiceSessionResult => {
         return;
       }
 
+      // Barge-in: cuando el usuario habla encima del asistente, cancelamos
+      // la respuesta actual y limpiamos audio pendiente para priorizar el nuevo turno.
       sendClientEvent({ type: "response.cancel" });
       sendClientEvent({ type: "output_audio_buffer.clear" });
       useVoiceBridgeStore
@@ -139,6 +147,8 @@ export const useRealtimeVoiceSession = (): UseRealtimeVoiceSessionResult => {
     async (callId: string, name: string, argsJson: string) => {
       const toolStore = useVoiceBridgeStore.getState();
 
+      // Regla importante: la tool se ejecuta una sola vez, en backend.
+      // El cliente solo coordina el evento, actualiza UI y devuelve resultado a Realtime.
       if (handledToolCallIdsRef.current.has(callId)) {
         return;
       }
@@ -173,6 +183,8 @@ export const useRealtimeVoiceSession = (): UseRealtimeVoiceSessionResult => {
 
         toolStore.toolCompleted(callId, payload.result ?? {});
 
+        // Realtime necesita recibir el resultado como function_call_output para que
+        // el modelo pueda continuar hablando con el contexto de la tool.
         sendClientEvent({
           type: "conversation.item.create",
           item: {
@@ -206,6 +218,8 @@ export const useRealtimeVoiceSession = (): UseRealtimeVoiceSessionResult => {
 
   const handleServerEvent = useCallback(
     (rawEvent: RealtimeServerEvent) => {
+      // Algunas versiones/eventos de Realtime envuelven las function calls distinto.
+      // Aceptamos ambos formatos para que el bridge sea tolerante a cambios menores.
       if (isFunctionCallDoneEvent(rawEvent)) {
         void handleToolCall(rawEvent.call_id, rawEvent.name, rawEvent.arguments);
         return;
@@ -319,12 +333,14 @@ export const useRealtimeVoiceSession = (): UseRealtimeVoiceSessionResult => {
       remoteAudio.autoplay = true;
       remoteAudioRef.current = remoteAudio;
 
+      // El track remoto trae la voz del asistente; no se guarda en CopilotChat.
+      // CopilotKit sigue siendo solo la capa visual del chat.
       peer.ontrack = (event) => {
         const [stream] = event.streams;
         if (stream && remoteAudioRef.current) {
           remoteAudioRef.current.srcObject = stream;
           void remoteAudioRef.current.play().catch(() => {
-            // ignored on purpose; autoplay can be blocked until user interaction
+            // Algunos navegadores bloquean autoplay hasta la primera interaccion.
           });
         }
       };
@@ -340,6 +356,8 @@ export const useRealtimeVoiceSession = (): UseRealtimeVoiceSessionResult => {
       const dataChannel = peer.createDataChannel("oai-events");
       dataChannelRef.current = dataChannel;
 
+      // El DataChannel es el canal de control: aqui llegan eventos de voz,
+      // estados de respuesta y function calls, no audio.
       dataChannel.addEventListener("open", () => {
         setConnectionState("listening");
       });
@@ -373,6 +391,8 @@ export const useRealtimeVoiceSession = (): UseRealtimeVoiceSessionResult => {
         throw new Error("Missing SDP offer payload");
       }
 
+      // Intercambio SDP navegador -> OpenAI Realtime.
+      // El token efimero viene de nuestro backend; nunca usamos OPENAI_API_KEY aqui.
       const sdpResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
         method: "POST",
         headers: {

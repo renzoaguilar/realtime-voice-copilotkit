@@ -7,6 +7,8 @@ import { useVoiceBridgeStore } from "@/store/voice-bridge-store";
 
 const REALTIME_TOOL_MESSAGE_PREFIX = "rt-tool-bridge";
 
+// El bridge crea mensajes internos dentro de CopilotChat. El prefijo permite
+// distinguirlos de mensajes normales del usuario/asistente y reemplazarlos sin tocar el resto.
 const isRealtimeBridgeMessage = (message: Message): boolean =>
   message.id.startsWith(REALTIME_TOOL_MESSAGE_PREFIX);
 
@@ -26,6 +28,8 @@ const buildToolMessages = (
     }
 
     const assistantMessage: Message = {
+      // CopilotKit renderiza actions cuando ve un mensaje assistant con toolCalls.
+      // Por eso traducimos una tool de Realtime a este mensaje sintetico.
       id: `${REALTIME_TOOL_MESSAGE_PREFIX}-assistant-${callId}`,
       role: "assistant",
       name: "realtime_voice_tool",
@@ -46,6 +50,8 @@ const buildToolMessages = (
 
     if (tool.status === "complete" || tool.status === "error") {
       const toolMessage: Message = {
+        // Este mensaje queda vinculado por toolCallId al assistantMessage anterior.
+        // Asi la card puede mostrar resultado o error sin ejecutar la tool otra vez.
         id: `${REALTIME_TOOL_MESSAGE_PREFIX}-result-${callId}`,
         role: "tool",
         toolCallId: callId,
@@ -93,6 +99,8 @@ export const RealtimeCopilotBridge = () => {
   const toolsByCallId = useVoiceBridgeStore((state) => state.toolsByCallId);
   const toolOrder = useVoiceBridgeStore((state) => state.toolOrder);
 
+  // El store es la fuente de verdad para tools disparadas por voz.
+  // CopilotChat solo recibe una representacion visual sincronizada.
   const nextRealtimeMessages = useMemo(
     () => buildToolMessages(toolOrder, toolsByCallId),
     [toolOrder, toolsByCallId],
@@ -114,6 +122,8 @@ export const RealtimeCopilotBridge = () => {
       return;
     }
 
+    // Preservamos la conversacion normal y reemplazamos solo mensajes del bridge.
+    // Esto evita que cada cambio de progreso duplique cards en el chat.
     const nonRealtimeMessages = messages.filter(
       (message) => !isRealtimeBridgeMessage(message),
     );

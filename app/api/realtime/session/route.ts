@@ -9,6 +9,8 @@ export const POST = async () => {
   try {
     const openai = getOpenAIClient();
 
+    // El navegador solo recibe este client secret temporal.
+    // OPENAI_API_KEY queda siempre en servidor y no viaja al bundle cliente.
     const secret = await openai.realtime.clientSecrets.create({
       expires_after: {
         anchor: "created_at",
@@ -36,6 +38,8 @@ export const POST = async () => {
           },
         },
         tool_choice: "auto",
+        // Estas definiciones permiten que Realtime decida llamar tools por voz.
+        // La ejecucion real sigue ocurriendo en /api/tools.
         tools: getRealtimeToolDefinitions(),
       },
     });

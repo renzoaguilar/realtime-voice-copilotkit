@@ -8,6 +8,7 @@ export const getOpenAIClient = (): OpenAI => {
   }
 
   if (!cachedClient) {
+    // Reutiliza una instancia del SDK por proceso para evitar recreaciones.
     cachedClient = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });

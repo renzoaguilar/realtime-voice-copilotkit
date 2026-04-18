@@ -1,6 +1,8 @@
 import type { Action, Parameter } from "@copilotkit/shared";
 import { z } from "zod";
 
+// Este archivo es la fuente unica de verdad de tools:
+// define el contrato que ve Realtime, el contrato que ve CopilotKit y la ejecucion real.
 export type ServerToolName =
   | "lookup_weather"
   | "lookup_population"
@@ -9,7 +11,9 @@ export type ServerToolName =
 type ToolSpec = {
   name: ServerToolName;
   description: string;
+  // JSON Schema usado por OpenAI Realtime al decidir si llama una function.
   realtimeParameters: Record<string, unknown>;
+  // Formato de parametros que espera CopilotKit para exponer actions de texto.
   copilotParameters: Parameter[];
 };
 
@@ -211,6 +215,7 @@ const TOOL_SPECS: ToolSpec[] = [
   },
 ];
 
+// Realtime necesita tools como JSON Schema dentro de la configuracion de sesion.
 export const getRealtimeToolDefinitions = (): Array<Record<string, unknown>> =>
   TOOL_SPECS.map((tool) => ({
     type: "function",
@@ -219,6 +224,7 @@ export const getRealtimeToolDefinitions = (): Array<Record<string, unknown>> =>
     parameters: tool.realtimeParameters,
   }));
 
+// CopilotKit runtime usa el mismo catalogo, pero con handler server-side.
 export const getCopilotRuntimeActions = (): Array<Action<Parameter[]>> =>
   TOOL_SPECS.map((tool) => ({
     name: tool.name,
@@ -232,6 +238,7 @@ export const executeServerTool = async (
   name: string,
   rawArgs: Record<string, unknown>,
 ): Promise<Record<string, unknown>> => {
+  // Cada branch valida sus argumentos con zod antes de ejecutar logica.
   if (name === "lookup_weather") {
     const args = weatherArgsSchema.parse(rawArgs);
     const bucket = hashString(args.location) % weatherSummaryByBucket.length;
@@ -254,6 +261,7 @@ export const executeServerTool = async (
     const args = populationArgsSchema.parse(rawArgs);
     const key = args.location.trim().toLowerCase();
     const knownPopulation = populationDataset[key];
+    // Dataset demo para ciudades conocidas; simulacion deterministica para el resto.
     const fallbackPopulation = 150000 + (hashString(`${args.location}-pop`) % 21000000);
     const population = knownPopulation?.population ?? fallbackPopulation;
     const formattedPopulation = new Intl.NumberFormat("en-US").format(population);

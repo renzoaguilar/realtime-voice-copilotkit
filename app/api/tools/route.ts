@@ -14,6 +14,8 @@ const toolRequestSchema = z.object({
 export const POST = async (request: Request) => {
   try {
     const payload = toolRequestSchema.parse(await request.json());
+    // Punto unico de ejecucion de tools para voz y texto.
+    // Esto mantiene secrets, validacion y logica de negocio fuera del navegador.
     const result = await executeServerTool(payload.name, payload.args);
 
     return NextResponse.json({
