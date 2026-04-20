@@ -32,80 +32,160 @@ const createTaskArgsSchema = z.object({
   dueDate: z.string().optional(),
 });
 
-const weatherSummaryByBucket = [
-  "Sunny",
-  "Partly cloudy",
-  "Breezy",
-  "Misty",
-  "Light rain",
-  "Overcast",
-];
-
-const populationDataset: Record<
-  string,
-  { country: string; population: number; scope: "urban_agglomeration_estimate" }
-> = {
-  lima: {
-    country: "Peru",
-    population: 11100000,
-    scope: "urban_agglomeration_estimate",
-  },
-  "mexico city": {
-    country: "Mexico",
-    population: 22500000,
-    scope: "urban_agglomeration_estimate",
-  },
-  bogota: {
-    country: "Colombia",
-    population: 11600000,
-    scope: "urban_agglomeration_estimate",
-  },
-  "buenos aires": {
-    country: "Argentina",
-    population: 15600000,
-    scope: "urban_agglomeration_estimate",
-  },
-  "new york": {
-    country: "United States",
-    population: 19300000,
-    scope: "urban_agglomeration_estimate",
-  },
-  "sao paulo": {
-    country: "Brazil",
-    population: 22100000,
-    scope: "urban_agglomeration_estimate",
-  },
-  madrid: {
-    country: "Spain",
-    population: 6800000,
-    scope: "urban_agglomeration_estimate",
-  },
-  barcelona: {
-    country: "Spain",
-    population: 5600000,
-    scope: "urban_agglomeration_estimate",
-  },
-  paris: {
-    country: "France",
-    population: 11100000,
-    scope: "urban_agglomeration_estimate",
-  },
-  tokyo: {
-    country: "Japan",
-    population: 37100000,
-    scope: "urban_agglomeration_estimate",
-  },
-};
-
 const taskMemory: Array<{ id: string; title: string; dueDate?: string }> = [];
 
-const hashString = (value: string): number => {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash << 5) - hash + value.charCodeAt(index);
-    hash |= 0;
+type GeocodingResult = {
+  name: string;
+  country?: string;
+  latitude: number;
+  longitude: number;
+  population?: number;
+};
+
+type OpenMeteoGeocodingResponse = {
+  results?: Array<{
+    name?: string;
+    country?: string;
+    latitude?: number;
+    longitude?: number;
+    population?: number;
+  }>;
+};
+
+type OpenMeteoWeatherResponse = {
+  current?: {
+    temperature_2m?: number;
+    weather_code?: number;
+  };
+};
+
+const OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search";
+const OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
+
+const WEATHER_SUMMARY_BY_CODE: Record<number, string> = {
+  0: "Clear sky",
+  1: "Mainly clear",
+  2: "Partly cloudy",
+  3: "Overcast",
+  45: "Fog",
+  48: "Depositing rime fog",
+  51: "Light drizzle",
+  53: "Drizzle",
+  55: "Dense drizzle",
+  56: "Light freezing drizzle",
+  57: "Dense freezing drizzle",
+  61: "Slight rain",
+  63: "Rain",
+  65: "Heavy rain",
+  66: "Light freezing rain",
+  67: "Heavy freezing rain",
+  71: "Slight snow",
+  73: "Snow",
+  75: "Heavy snow",
+  77: "Snow grains",
+  80: "Rain showers",
+  81: "Rain showers",
+  82: "Violent rain showers",
+  85: "Snow showers",
+  86: "Heavy snow showers",
+  95: "Thunderstorm",
+  96: "Thunderstorm with hail",
+  99: "Severe thunderstorm with hail",
+};
+
+const fetchJson = async <T>(url: string, timeoutMs = 8000): Promise<T> => {
+  // AbortController evita que una API externa lenta bloquee toda la respuesta.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(`HTTP ${response.status}: ${message}`);
+    }
+
+    return (await response.json()) as T;
+  } finally {
+    clearTimeout(timeout);
   }
-  return Math.abs(hash);
+};
+
+const normalizeCityName = (value: string): string => value.trim().toLowerCase();
+
+const findBestLocation = (
+  results: GeocodingResult[],
+  cityName: string,
+  country?: string,
+): GeocodingResult | undefined => {
+  const normalizedCity = normalizeCityName(cityName);
+  const normalizedCountry = country ? normalizeCityName(country) : null;
+
+  // Priorizamos coincidencia exacta por ciudad y pais cuando se provee pais.
+  const exact = results.find((result) => {
+    const sameCity = normalizeCityName(result.name) === normalizedCity;
+    if (!sameCity) {
+      return false;
+    }
+
+    if (!normalizedCountry) {
+      return true;
+    }
+
+    const resultCountry = result.country ? normalizeCityName(result.country) : "";
+    return resultCountry === normalizedCountry;
+  });
+
+  if (exact) {
+    return exact;
+  }
+
+  // Si no hay exacta, hacemos match flexible por ciudad.
+  return results.find((result) =>
+    normalizeCityName(result.name).includes(normalizedCity),
+  );
+};
+
+const geocodeCity = async (
+  cityName: string,
+  country?: string,
+): Promise<GeocodingResult> => {
+  const query = country ? `${cityName}, ${country}` : cityName;
+  const url =
+    `${OPEN_METEO_GEOCODING_URL}?name=${encodeURIComponent(query)}` +
+    "&count=10&language=en&format=json";
+
+  const payload = await fetchJson<OpenMeteoGeocodingResponse>(url);
+  const candidates = (payload.results ?? [])
+    .filter(
+      (result): result is Required<Pick<GeocodingResult, "name" | "latitude" | "longitude">> &
+        Pick<GeocodingResult, "country" | "population"> =>
+        typeof result.name === "string" &&
+        typeof result.latitude === "number" &&
+        typeof result.longitude === "number",
+    )
+    .map((result) => ({
+      name: result.name,
+      country: result.country,
+      latitude: result.latitude,
+      longitude: result.longitude,
+      population: result.population,
+    }));
+
+  if (candidates.length === 0) {
+    throw new Error(`No se encontro la ciudad: ${cityName}`);
+  }
+
+  const best = findBestLocation(candidates, cityName, country) ?? candidates[0];
+  return best;
 };
 
 const TOOL_SPECS: ToolSpec[] = [
@@ -241,42 +321,69 @@ export const executeServerTool = async (
   // Cada branch valida sus argumentos con zod antes de ejecutar logica.
   if (name === "lookup_weather") {
     const args = weatherArgsSchema.parse(rawArgs);
-    const bucket = hashString(args.location) % weatherSummaryByBucket.length;
-    const tempCelsius = 14 + (hashString(`${args.location}-temp`) % 17);
+    const city = await geocodeCity(args.location);
+    const weatherUrl =
+      `${OPEN_METEO_FORECAST_URL}?latitude=${city.latitude}&longitude=${city.longitude}` +
+      "&current=temperature_2m,weather_code&timezone=auto";
+    const weatherPayload = await fetchJson<OpenMeteoWeatherResponse>(weatherUrl);
+
+    const temperatureC = weatherPayload.current?.temperature_2m;
+    if (typeof temperatureC !== "number" || Number.isNaN(temperatureC)) {
+      throw new Error(`No se pudo obtener temperatura para ${args.location}`);
+    }
+
+    const weatherCode = weatherPayload.current?.weather_code;
+    const summary =
+      typeof weatherCode === "number"
+        ? (WEATHER_SUMMARY_BY_CODE[weatherCode] ?? `Weather code ${weatherCode}`)
+        : "Unknown conditions";
     const displayTemp =
-      args.unit === "f" ? Math.round((tempCelsius * 9) / 5 + 32) : tempCelsius;
+      args.unit === "f"
+        ? Math.round((temperatureC * 9) / 5 + 32)
+        : Math.round(temperatureC);
 
     return {
       ok: true,
-      location: args.location,
+      location: city.name,
+      country: city.country ?? "Unknown",
       unit: args.unit,
       temperature: displayTemp,
-      summary: weatherSummaryByBucket[bucket],
-      source: "demo-weather-simulation",
+      summary,
+      weatherCode: typeof weatherCode === "number" ? weatherCode : null,
+      source: "open-meteo",
+      coordinates: {
+        latitude: city.latitude,
+        longitude: city.longitude,
+      },
       retrievedAt: new Date().toISOString(),
     };
   }
 
   if (name === "lookup_population") {
     const args = populationArgsSchema.parse(rawArgs);
-    const key = args.location.trim().toLowerCase();
-    const knownPopulation = populationDataset[key];
-    // Dataset demo para ciudades conocidas; simulacion deterministica para el resto.
-    const fallbackPopulation = 150000 + (hashString(`${args.location}-pop`) % 21000000);
-    const population = knownPopulation?.population ?? fallbackPopulation;
+    const city = await geocodeCity(args.location, args.country);
+    if (typeof city.population !== "number" || Number.isNaN(city.population)) {
+      throw new Error(
+        `La fuente externa no reporto poblacion para ${city.name}`,
+      );
+    }
+
+    const population = city.population;
     const formattedPopulation = new Intl.NumberFormat("en-US").format(population);
 
     return {
       ok: true,
-      location: args.location,
-      country: knownPopulation?.country ?? args.country ?? "Unknown",
+      location: city.name,
+      country: city.country ?? args.country ?? "Unknown",
       population,
       formattedPopulation,
-      scope: knownPopulation?.scope ?? "simulated_city_estimate",
-      source: knownPopulation
-        ? "demo-population-dataset"
-        : "demo-population-simulation",
-      isEstimate: true,
+      scope: "city_geocoding_population",
+      source: "open-meteo-geocoding",
+      isEstimate: false,
+      coordinates: {
+        latitude: city.latitude,
+        longitude: city.longitude,
+      },
       retrievedAt: new Date().toISOString(),
     };
   }

@@ -125,7 +125,8 @@ Definidas en [`lib/server/tools.ts`](/Users/renzo/Desktop/AGENTIC-UI/realtime-vo
 - `create_task`
 
 Notas:
-- `lookup_weather` y `lookup_population` usan dataset/simulacion de demo.
+- `lookup_weather` consulta clima real via Open-Meteo (`geocoding` + `forecast`).
+- `lookup_population` consulta poblacion de ciudad via Open-Meteo Geocoding.
 - `create_task` guarda en memoria de proceso (sin persistencia de base de datos).
 
 ## Guia rapida para nuevos desarrolladores
@@ -162,13 +163,13 @@ Notas:
 
 - El bridge usa mensajes sinteticos para reflejar tools en chat. Funciona bien, pero agrega ruido tecnico al historial.
 - No hay canal sideband server-to-server para observabilidad fina de sesiones realtime.
-- Tools demo sin integraciones reales externas (clima/poblacion).
+- Dependemos de disponibilidad y latencia de Open-Meteo para clima/poblacion.
 - Sin tests E2E de audio/barge-in en esta version.
 - `create_task` no persiste entre reinicios del servidor.
 
 ## Siguientes pasos recomendados
 
-1. Conectar tools a servicios reales y persistencia.
+1. Agregar cache y politica de reintentos para tools externas.
 2. Agregar auth por usuario para tools y sesiones.
 3. Implementar trazas y auditoria de tool calls.
 4. Mejorar bridge para separar mejor contexto conversacional vs mensajes tecnicos.
@@ -190,4 +191,3 @@ Notas:
 - **No aparece la card de una tool**:
   - confirmar nombre de tool y renderer `useCopilotAction`
   - confirmar que `RealtimeCopilotBridge` este montado en `CopilotChatShell`
-
