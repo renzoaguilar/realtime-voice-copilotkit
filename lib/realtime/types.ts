@@ -23,11 +23,22 @@ export type VoiceEventType =
 
 export type ToolExecutionStatus = "inProgress" | "complete" | "error";
 
+export type RealtimeChatRole = "user" | "assistant";
+
 export interface VoiceTimelineEvent {
   id: string;
   type: VoiceEventType;
   createdAt: number;
   detail?: Record<string, unknown>;
+}
+
+export interface RealtimeChatRecord {
+  messageId: string;
+  role: RealtimeChatRole;
+  content: string;
+  finalized: boolean;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface ToolExecutionRecord {

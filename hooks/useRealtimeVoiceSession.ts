@@ -27,6 +27,75 @@ type OutputItemFunctionCallDoneEvent = {
   };
 };
 
+type ConversationMessageItem = {
+  id?: string;
+  type?: string;
+  role?: "user" | "assistant" | "system";
+  content?: Array<{
+    type?: string;
+    text?: string;
+    transcript?: string;
+  }>;
+};
+
+type ConversationItemCreatedEvent = {
+  type: "conversation.item.created";
+  item?: ConversationMessageItem;
+};
+
+type ConversationItemAddedEvent = {
+  type: "conversation.item.added";
+  item?: ConversationMessageItem;
+};
+
+type InputAudioTranscriptionCompletedEvent = {
+  type: "conversation.item.input_audio_transcription.completed";
+  item_id: string;
+  transcript: string;
+};
+
+type InputAudioTranscriptionDeltaEvent = {
+  type: "conversation.item.input_audio_transcription.delta";
+  item_id: string;
+  delta?: string;
+};
+
+type ResponseAudioTranscriptDeltaEvent = {
+  type: "response.audio_transcript.delta";
+  item_id: string;
+  delta: string;
+};
+
+type ResponseAudioTranscriptDoneEvent = {
+  type: "response.audio_transcript.done";
+  item_id: string;
+  transcript: string;
+};
+
+type ResponseOutputAudioTranscriptDeltaEvent = {
+  type: "response.output_audio_transcript.delta";
+  item_id: string;
+  delta: string;
+};
+
+type ResponseOutputAudioTranscriptDoneEvent = {
+  type: "response.output_audio_transcript.done";
+  item_id: string;
+  transcript: string;
+};
+
+type ResponseOutputTextDeltaEvent = {
+  type: "response.output_text.delta";
+  item_id: string;
+  delta: string;
+};
+
+type ResponseOutputTextDoneEvent = {
+  type: "response.output_text.done";
+  item_id: string;
+  text: string;
+};
+
 type SessionBootstrapResponse = {
   value?: string;
   clientSecret?: string;
@@ -63,6 +132,96 @@ const isOutputItemFunctionCallDoneEvent = (
   event.type === "response.output_item.done" &&
   typeof event.item === "object" &&
   event.item !== null;
+
+const isConversationItemCreatedEvent = (
+  event: RealtimeServerEvent,
+): event is ConversationItemCreatedEvent =>
+  event.type === "conversation.item.created" &&
+  typeof event.item === "object" &&
+  event.item !== null;
+
+const isConversationItemAddedEvent = (
+  event: RealtimeServerEvent,
+): event is ConversationItemAddedEvent =>
+  event.type === "conversation.item.added" &&
+  typeof event.item === "object" &&
+  event.item !== null;
+
+const isInputAudioTranscriptionCompletedEvent = (
+  event: RealtimeServerEvent,
+): event is InputAudioTranscriptionCompletedEvent =>
+  event.type === "conversation.item.input_audio_transcription.completed" &&
+  typeof event.item_id === "string" &&
+  typeof event.transcript === "string";
+
+const isInputAudioTranscriptionDeltaEvent = (
+  event: RealtimeServerEvent,
+): event is InputAudioTranscriptionDeltaEvent =>
+  event.type === "conversation.item.input_audio_transcription.delta" &&
+  typeof event.item_id === "string";
+
+const isResponseAudioTranscriptDeltaEvent = (
+  event: RealtimeServerEvent,
+): event is ResponseAudioTranscriptDeltaEvent =>
+  event.type === "response.audio_transcript.delta" &&
+  typeof event.item_id === "string" &&
+  typeof event.delta === "string";
+
+const isResponseAudioTranscriptDoneEvent = (
+  event: RealtimeServerEvent,
+): event is ResponseAudioTranscriptDoneEvent =>
+  event.type === "response.audio_transcript.done" &&
+  typeof event.item_id === "string" &&
+  typeof event.transcript === "string";
+
+const isResponseOutputAudioTranscriptDeltaEvent = (
+  event: RealtimeServerEvent,
+): event is ResponseOutputAudioTranscriptDeltaEvent =>
+  event.type === "response.output_audio_transcript.delta" &&
+  typeof event.item_id === "string" &&
+  typeof event.delta === "string";
+
+const isResponseOutputAudioTranscriptDoneEvent = (
+  event: RealtimeServerEvent,
+): event is ResponseOutputAudioTranscriptDoneEvent =>
+  event.type === "response.output_audio_transcript.done" &&
+  typeof event.item_id === "string" &&
+  typeof event.transcript === "string";
+
+const isResponseOutputTextDeltaEvent = (
+  event: RealtimeServerEvent,
+): event is ResponseOutputTextDeltaEvent =>
+  event.type === "response.output_text.delta" &&
+  typeof event.item_id === "string" &&
+  typeof event.delta === "string";
+
+const isResponseOutputTextDoneEvent = (
+  event: RealtimeServerEvent,
+): event is ResponseOutputTextDoneEvent =>
+  event.type === "response.output_text.done" &&
+  typeof event.item_id === "string" &&
+  typeof event.text === "string";
+
+const extractConversationItemText = (item: ConversationMessageItem): string => {
+  if (!Array.isArray(item.content)) {
+    return "";
+  }
+
+  const chunks: string[] = [];
+
+  item.content.forEach((part) => {
+    if (typeof part?.text === "string" && part.text.trim()) {
+      chunks.push(part.text.trim());
+      return;
+    }
+
+    if (typeof part?.transcript === "string" && part.transcript.trim()) {
+      chunks.push(part.transcript.trim());
+    }
+  });
+
+  return chunks.join(" ").trim();
+};
 
 export type UseRealtimeVoiceSessionResult = {
   isVoiceMode: boolean;
@@ -218,6 +377,118 @@ export const useRealtimeVoiceSession = (): UseRealtimeVoiceSessionResult => {
 
   const handleServerEvent = useCallback(
     (rawEvent: RealtimeServerEvent) => {
+      const bridgeStore = useVoiceBridgeStore.getState();
+
+      // Reservamos la posicion de turnos de chat apenas Realtime crea el item.
+      // Esto evita que una tool se renderice arriba del mensaje del usuario
+      // cuando la transcripcion llega unos ms mas tarde.
+      if (
+        isConversationItemCreatedEvent(rawEvent) ||
+        isConversationItemAddedEvent(rawEvent)
+      ) {
+        const item = rawEvent.item;
+        if (
+          item &&
+          item.type === "message" &&
+          (item.role === "user" || item.role === "assistant") &&
+          typeof item.id === "string"
+        ) {
+          const role = item.role;
+          const messageId = `rt-${role}-${item.id}`;
+          const existing = bridgeStore.realtimeMessagesById[messageId];
+          const extractedContent = extractConversationItemText(item);
+
+          // No pisamos contenido existente con vacio si el item llego tarde/desfasado.
+          if (existing?.content && !extractedContent) {
+            return;
+          }
+
+          bridgeStore.upsertRealtimeMessage({
+            messageId,
+            role,
+            content: extractedContent || existing?.content || "",
+            finalized: existing?.finalized ?? false,
+          });
+        }
+        return;
+      }
+
+      if (isInputAudioTranscriptionDeltaEvent(rawEvent)) {
+        if (!rawEvent.delta) {
+          return;
+        }
+
+        bridgeStore.appendRealtimeMessageDelta({
+          messageId: `rt-user-${rawEvent.item_id}`,
+          role: "user",
+          delta: rawEvent.delta,
+        });
+        return;
+      }
+
+      // Cuando termina la transcripcion de un turno de voz del usuario, lo publicamos en el chat.
+      if (isInputAudioTranscriptionCompletedEvent(rawEvent)) {
+        const transcript = rawEvent.transcript.trim();
+        const messageId = `rt-user-${rawEvent.item_id}`;
+        const existingContent =
+          bridgeStore.realtimeMessagesById[messageId]?.content ?? "";
+        const content = transcript || existingContent;
+
+        if (!content) {
+          return;
+        }
+
+        bridgeStore.upsertRealtimeMessage({
+          messageId,
+          role: "user",
+          content,
+          finalized: true,
+        });
+        return;
+      }
+
+      // El asistente puede ir enviando deltas de transcripcion mientras habla.
+      if (
+        isResponseOutputAudioTranscriptDeltaEvent(rawEvent) ||
+        isResponseAudioTranscriptDeltaEvent(rawEvent) ||
+        isResponseOutputTextDeltaEvent(rawEvent)
+      ) {
+        const delta = rawEvent.delta;
+        bridgeStore.appendRealtimeMessageDelta({
+          messageId: `rt-assistant-${rawEvent.item_id}`,
+          role: "assistant",
+          delta,
+        });
+        return;
+      }
+
+      // Al cerrar la respuesta del asistente, marcamos el mensaje como finalizado.
+      if (
+        isResponseOutputAudioTranscriptDoneEvent(rawEvent) ||
+        isResponseAudioTranscriptDoneEvent(rawEvent) ||
+        isResponseOutputTextDoneEvent(rawEvent)
+      ) {
+        const messageId = `rt-assistant-${rawEvent.item_id}`;
+        const finalTranscript = (
+          "transcript" in rawEvent ? rawEvent.transcript : rawEvent.text
+        ).trim();
+        const existingContent =
+          bridgeStore.realtimeMessagesById[messageId]?.content ?? "";
+        const content = finalTranscript || existingContent;
+
+        if (!content) {
+          return;
+        }
+
+        bridgeStore.upsertRealtimeMessage({
+          messageId,
+          role: "assistant",
+          content,
+          finalized: true,
+        });
+        return;
+      }
+
       // Algunas versiones/eventos de Realtime envuelven las function calls distinto.
       // Aceptamos ambos formatos para que el bridge sea tolerante a cambios menores.
       if (isFunctionCallDoneEvent(rawEvent)) {

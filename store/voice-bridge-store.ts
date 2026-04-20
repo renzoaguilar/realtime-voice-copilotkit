@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import {
+  RealtimeChatRecord,
+  RealtimeChatRole,
   ToolExecutionRecord,
   VoiceEventType,
   VoiceSessionState,
@@ -24,11 +26,26 @@ type ToolStartedPayload = {
   args: Record<string, unknown>;
 };
 
+type UpsertRealtimeChatPayload = {
+  messageId: string;
+  role: RealtimeChatRole;
+  content: string;
+  finalized?: boolean;
+};
+
+type AppendRealtimeChatDeltaPayload = {
+  messageId: string;
+  role: RealtimeChatRole;
+  delta: string;
+};
+
 type VoiceBridgeState = {
   connectionState: VoiceSessionState;
   timeline: VoiceTimelineEvent[];
   toolsByCallId: Record<string, ToolExecutionRecord>;
   toolOrder: string[];
+  realtimeMessagesById: Record<string, RealtimeChatRecord>;
+  realtimeMessageOrder: string[];
   setConnectionState: (
     next: VoiceSessionState,
     eventType?: VoiceEventType,
@@ -39,6 +56,8 @@ type VoiceBridgeState = {
   toolProgress: (callId: string, progress: string) => void;
   toolCompleted: (callId: string, result: unknown) => void;
   toolFailed: (callId: string, message: string) => void;
+  upsertRealtimeMessage: (payload: UpsertRealtimeChatPayload) => void;
+  appendRealtimeMessageDelta: (payload: AppendRealtimeChatDeltaPayload) => void;
   reset: () => void;
 };
 
@@ -56,6 +75,8 @@ export const useVoiceBridgeStore = create<VoiceBridgeState>((set) => ({
   timeline: [],
   toolsByCallId: {},
   toolOrder: [],
+  realtimeMessagesById: {},
+  realtimeMessageOrder: [],
 
   // Estado compartido por controles de voz, timeline y bridge visual de CopilotKit.
   setConnectionState: (next, eventType, detail) =>
@@ -205,11 +226,81 @@ export const useVoiceBridgeStore = create<VoiceBridgeState>((set) => ({
       };
     }),
 
+  upsertRealtimeMessage: ({ messageId, role, content, finalized = false }) =>
+    set((state) => {
+      const existing = state.realtimeMessagesById[messageId];
+      const now = Date.now();
+      const nextRecord: RealtimeChatRecord = existing
+        ? {
+            ...existing,
+            role,
+            content,
+            finalized,
+            updatedAt: now,
+          }
+        : {
+            messageId,
+            role,
+            content,
+            finalized,
+            createdAt: now,
+            updatedAt: now,
+          };
+
+      return {
+        realtimeMessagesById: {
+          ...state.realtimeMessagesById,
+          [messageId]: nextRecord,
+        },
+        realtimeMessageOrder: state.realtimeMessageOrder.includes(messageId)
+          ? state.realtimeMessageOrder
+          : [...state.realtimeMessageOrder, messageId],
+      };
+    }),
+
+  appendRealtimeMessageDelta: ({ messageId, role, delta }) =>
+    set((state) => {
+      if (!delta) {
+        return {};
+      }
+
+      const existing = state.realtimeMessagesById[messageId];
+      const now = Date.now();
+      const nextRecord: RealtimeChatRecord = existing
+        ? {
+            ...existing,
+            role,
+            content: `${existing.content}${delta}`,
+            finalized: false,
+            updatedAt: now,
+          }
+        : {
+            messageId,
+            role,
+            content: delta,
+            finalized: false,
+            createdAt: now,
+            updatedAt: now,
+          };
+
+      return {
+        realtimeMessagesById: {
+          ...state.realtimeMessagesById,
+          [messageId]: nextRecord,
+        },
+        realtimeMessageOrder: state.realtimeMessageOrder.includes(messageId)
+          ? state.realtimeMessageOrder
+          : [...state.realtimeMessageOrder, messageId],
+      };
+    }),
+
   reset: () =>
     set({
       connectionState: "idle",
       timeline: [],
       toolsByCallId: {},
       toolOrder: [],
+      realtimeMessagesById: {},
+      realtimeMessageOrder: [],
     }),
 }));

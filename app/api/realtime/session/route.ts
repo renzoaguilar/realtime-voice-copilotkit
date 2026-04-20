@@ -27,6 +27,12 @@ export const POST = async () => {
             voice: process.env.OPENAI_REALTIME_VOICE ?? "marin",
           },
           input: {
+            // Habilita eventos de transcripcion del usuario para sincronizarlos al chat visual.
+            transcription: {
+              model:
+                process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL ??
+                "gpt-4o-mini-transcribe",
+            },
             turn_detection: {
               type: "server_vad",
               threshold: 0.5,

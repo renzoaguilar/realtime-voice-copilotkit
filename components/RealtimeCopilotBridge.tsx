@@ -4,22 +4,40 @@ import { useCopilotChatInternal } from "@copilotkit/react-core";
 import type { Message } from "@copilotkit/shared";
 import { useEffect, useMemo } from "react";
 import { useVoiceBridgeStore } from "@/store/voice-bridge-store";
+import type {
+  RealtimeChatRecord,
+  ToolExecutionRecord,
+} from "@/lib/realtime/types";
 
 const REALTIME_TOOL_MESSAGE_PREFIX = "rt-tool-bridge";
+const REALTIME_CONVERSATION_MESSAGE_PREFIX = "rt-conversation-bridge";
 
 // El bridge crea mensajes internos dentro de CopilotChat. El prefijo permite
 // distinguirlos de mensajes normales del usuario/asistente y reemplazarlos sin tocar el resto.
-const isRealtimeBridgeMessage = (message: Message): boolean =>
-  message.id.startsWith(REALTIME_TOOL_MESSAGE_PREFIX);
+const isRealtimeBridgeMessage = (message: Message): boolean => {
+  const id = typeof message.id === "string" ? message.id : "";
+  return (
+    id.startsWith(REALTIME_TOOL_MESSAGE_PREFIX) ||
+    id.startsWith(REALTIME_CONVERSATION_MESSAGE_PREFIX)
+  );
+};
+
+type OrderedBridgeMessage = {
+  createdAt: number;
+  message: Message;
+};
+
+type ToolMap = Record<string, ToolExecutionRecord>;
+type RealtimeMessageMap = Record<string, RealtimeChatRecord>;
 
 const normalizeResultContent = (result: unknown): string =>
   JSON.stringify(result ?? {}, null, 2);
 
 const buildToolMessages = (
   toolOrder: string[],
-  toolsByCallId: ReturnType<typeof useVoiceBridgeStore.getState>["toolsByCallId"],
-): Message[] => {
-  const messages: Message[] = [];
+  toolsByCallId: ToolMap,
+): OrderedBridgeMessage[] => {
+  const messages: OrderedBridgeMessage[] = [];
 
   toolOrder.forEach((callId) => {
     const tool = toolsByCallId[callId];
@@ -46,7 +64,10 @@ const buildToolMessages = (
       ],
     };
 
-    messages.push(assistantMessage);
+    messages.push({
+      createdAt: tool.createdAt,
+      message: assistantMessage,
+    });
 
     if (tool.status === "complete" || tool.status === "error") {
       const toolMessage: Message = {
@@ -68,14 +89,61 @@ const buildToolMessages = (
           : {}),
       };
 
-      messages.push(toolMessage);
+      messages.push({
+        createdAt: tool.updatedAt,
+        message: toolMessage,
+      });
     }
   });
 
   return messages;
 };
 
-const toolSyncSignature = (messages: Message[]): string =>
+const buildConversationMessages = (
+  realtimeMessageOrder: string[],
+  realtimeMessagesById: RealtimeMessageMap,
+): OrderedBridgeMessage[] => {
+  const messages: OrderedBridgeMessage[] = [];
+
+  realtimeMessageOrder.forEach((messageId) => {
+    const entry = realtimeMessagesById[messageId];
+    if (!entry) {
+      return;
+    }
+
+    const content = entry.content.trim();
+    if (!content) {
+      return;
+    }
+
+    messages.push({
+      createdAt: entry.createdAt,
+      message: {
+        id: `${REALTIME_CONVERSATION_MESSAGE_PREFIX}-${entry.messageId}`,
+        role: entry.role,
+        content,
+      },
+    });
+  });
+
+  return messages;
+};
+
+const buildBridgeMessages = (
+  realtimeMessageOrder: string[],
+  realtimeMessagesById: RealtimeMessageMap,
+  toolOrder: string[],
+  toolsByCallId: ToolMap,
+): Message[] => {
+  return [
+    ...buildConversationMessages(realtimeMessageOrder, realtimeMessagesById),
+    ...buildToolMessages(toolOrder, toolsByCallId),
+  ]
+    .sort((left, right) => left.createdAt - right.createdAt)
+    .map((entry) => entry.message);
+};
+
+const bridgeSyncSignature = (messages: Message[]): string =>
   JSON.stringify(
     messages.map((message) => ({
       id: message.id,
@@ -98,22 +166,36 @@ export const RealtimeCopilotBridge = () => {
   const { messages, setMessages } = useCopilotChatInternal();
   const toolsByCallId = useVoiceBridgeStore((state) => state.toolsByCallId);
   const toolOrder = useVoiceBridgeStore((state) => state.toolOrder);
+  const realtimeMessagesById = useVoiceBridgeStore(
+    (state) => state.realtimeMessagesById,
+  );
+  const realtimeMessageOrder = useVoiceBridgeStore(
+    (state) => state.realtimeMessageOrder,
+  );
 
-  // El store es la fuente de verdad para tools disparadas por voz.
+  // El store es la fuente de verdad para tools + transcripciones Realtime.
   // CopilotChat solo recibe una representacion visual sincronizada.
   const nextRealtimeMessages = useMemo(
-    () => buildToolMessages(toolOrder, toolsByCallId),
-    [toolOrder, toolsByCallId],
+    () =>
+      buildBridgeMessages(
+        realtimeMessageOrder,
+        realtimeMessagesById,
+        toolOrder,
+        toolsByCallId,
+      ),
+    [realtimeMessageOrder, realtimeMessagesById, toolOrder, toolsByCallId],
   );
 
   const nextSignature = useMemo(
-    () => toolSyncSignature(nextRealtimeMessages),
+    () => bridgeSyncSignature(nextRealtimeMessages),
     [nextRealtimeMessages],
   );
 
   const currentSignature = useMemo(
     () =>
-      toolSyncSignature(messages.filter((message) => isRealtimeBridgeMessage(message))),
+      bridgeSyncSignature(
+        messages.filter((message) => isRealtimeBridgeMessage(message)),
+      ),
     [messages],
   );
 
